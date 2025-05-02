@@ -2,18 +2,11 @@
 
 # Konfigurierbare Pfade und Zeit
 M3U_FOLDER="/mnt/pve/media/music/downloads"
-NEW_M3U_FOLDER="/mnt/pve/media/music/library/__playlists/"
+NEW_M3U_FOLDER="/mnt/pve/media/music/library/"
 CONTAINER_NAME="beets"
 IMPORT_PATH="/app/music/downloads" # Innerhalb des Docker Containers
 CHECK_INTERVAL=30 # Zeit in Sekunden
 LOCK_FILE="/tmp/m3u_script.lock"
-
-# Funktion zum Auslesen der Metadaten einer MP3-Datei
-read_metadata() {
-    local mp3_file="$1"
-    local metadata=$(ffprobe -v quiet -print_format json -show_format "$mp3_file")
-    echo "$metadata"
-}
 
 # Funktion zum Aktualisieren der M3U-Datei
 update_m3u_file() {
@@ -25,11 +18,17 @@ update_m3u_file() {
         if [[ "$line" == *.mp3 ]]; then
             local title=$(basename "$line")
             local mp3_file="$M3U_FOLDER/$title"
-            local metadata=$(read_metadata "$mp3_file")
-            local albumartist=$(echo "$metadata" | jq -r '.format.tags.album_artist // "unknown"')
-            local album=$(echo "$metadata" | jq -r '.format.tags.album // "unknown"')
-            local new_path="../$albumartist/$album/$title"
-            echo "$new_path" >> "$new_m3u_file"
+
+            # Importiere die Datei mit Beets (single track import)
+            docker exec "$CONTAINER_NAME" beet import -s "$IMPORT_PATH/$title"
+            sleep 1
+
+            # Hole den neuen Pfad aus Beets
+            local new_path=$(docker exec "$CONTAINER_NAME" beet ls -f '$path' "$title" | tail -n 1)
+
+            # Relativen Pfad für die Playlist berechnen
+            local relative_path="${new_path#"$NEW_M3U_FOLDER"/}"
+            echo "$relative_path" >> "$new_m3u_file"
         else
             echo "$line" >> "$new_m3u_file"
         fi
@@ -79,6 +78,7 @@ main() {
         done
     fi
 
+    # Importiere alle neuen Titel nach der Playlist-Aktualisierung
     docker exec "$CONTAINER_NAME" beet import -s "$IMPORT_PATH"
 
     remove_lock
